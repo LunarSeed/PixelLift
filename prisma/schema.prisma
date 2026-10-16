@@ -1,0 +1,52 @@
+// PixelLift - Prisma Database Schema
+// Optimized for PostgreSQL and Serverless Neon connections
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ActionType {
+  PURCHASE
+  USAGE
+}
+
+model User {
+  id             String          @id @default(cuid())
+  email          String          @unique
+  credits        Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  creditHistory  CreditHistory[]
+  imageResults   ImageResult[]
+
+  @@index([email])
+}
+
+model CreditHistory {
+  id          String     @id @default(cuid())
+  userId      String
+  amount      Int        // e.g., +50 for PURCHASE, -1 for USAGE
+  action      ActionType
+  description String
+  createdAt   DateTime   @default(now())
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model ImageResult {
+  id          String   @id @default(cuid())
+  userId      String
+  originalUrl String   @db.Text
+  enhancedUrl String   @db.Text
+  scaleFactor Int      @default(4)
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
