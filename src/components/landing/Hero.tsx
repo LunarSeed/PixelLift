@@ -1,17 +1,21 @@
-'use client';
-
 import React from 'react';
 import Link from 'next/link';
-import { Sparkles, ArrowRight, Zap, CheckCircle2, Image as ImageIcon } from 'lucide-react';
+import { Sparkles, ArrowRight, CheckCircle2, Image as ImageIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
 export function Hero() {
   return (
-    <section className="relative pt-16 pb-20 md:pt-28 md:pb-28 overflow-hidden">
-      {/* Background Glow effects */}
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[650px] h-[450px] bg-brand-600/15 rounded-full blur-[130px] pointer-events-none" />
-      <div className="absolute top-1/3 left-1/3 w-[300px] h-[300px] bg-accent-cyan/10 rounded-full blur-[100px] pointer-events-none" />
+    <section className="relative pt-16 pb-20 md:pt-28 md:pb-28 overflow-hidden contain-paint">
+      {/* Background Glow effects - isolated on GPU compositor */}
+      <div 
+        aria-hidden="true"
+        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[650px] h-[450px] bg-brand-600/15 rounded-full blur-[100px] pointer-events-none transform-gpu will-change-transform translate-z-0" 
+      />
+      <div 
+        aria-hidden="true"
+        className="absolute top-1/3 left-1/3 w-[300px] h-[300px] bg-accent-cyan/10 rounded-full blur-[80px] pointer-events-none transform-gpu will-change-transform translate-z-0" 
+      />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 text-center">
         {/* Top Tagline Badge */}

@@ -40,25 +40,26 @@ export async function POST(req: NextRequest) {
         priceId = prices.data[0].id;
       }
     }
+// 2. Call stripe.checkout.sessions.create() with required routing URLs
+ const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://pixel-lift-lake.vercel.app').replace(/\/$/, '');
 
-    // 2. Call stripe.checkout.sessions.create() with required routing URLs
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      line_items: [
-        {
-          price: priceId,
-          quantity: 1,
-        },
-      ],
-      metadata: {
-        userId,
-      },
-      client_reference_id: userId,
-      success_url: 'http://localhost:3000/dashboard',
-      cancel_url: 'http://localhost:3000/',
-    });
-
-    // 3. Return JSON containing url
+ const session = await stripe.checkout.sessions.create({
+   mode: 'payment',
+   line_items: [
+     {
+       price: priceId,
+       quantity: 1,
+     },
+   ],
+   metadata: {
+     userId,
+     credits: '50',
+   },
+   client_reference_id: userId,
+   success_url: `${appUrl}/dashboard`,
+   cancel_url: `${appUrl}/`,
+ });
+// 3. Return JSON containing url
     return NextResponse.json({ url: session.url });
   } catch (error: any) {
     console.error('[Stripe Checkout Error]:', error);

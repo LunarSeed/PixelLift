@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Sparkles, ArrowLeftRight } from 'lucide-react';
 
 interface ComparisonSliderProps {
@@ -19,44 +19,61 @@ export function ComparisonSlider({
   className = '',
 }: ComparisonSliderProps) {
   const [sliderPosition, setSliderPosition] = useState(50);
-  const [isDragging, setIsDragging] = useState(false);
+  const isDraggingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rectRef = useRef<DOMRect | null>(null);
+  const rafRef = useRef<number | null>(null);
 
-  const handleMove = useCallback((clientX: number) => {
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const percentage = Math.min(Math.max((x / rect.width) * 100, 0), 100);
-    setSliderPosition(percentage);
+  const updateSlider = useCallback((clientX: number) => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+
+    rafRef.current = requestAnimationFrame(() => {
+      const rect = rectRef.current || containerRef.current?.getBoundingClientRect();
+      if (!rect || rect.width === 0) return;
+
+      const x = clientX - rect.left;
+      const percentage = Math.min(Math.max((x / rect.width) * 100, 0), 100);
+      setSliderPosition(percentage);
+    });
   }, []);
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!isDragging) return;
-    handleMove(e.touches[0].clientX);
+  const startDragging = (clientX: number) => {
+    isDraggingRef.current = true;
+    if (containerRef.current) {
+      // Cache bounding box once on click/touch start to prevent layout thrashing during drag
+      rectRef.current = containerRef.current.getBoundingClientRect();
+    }
+    updateSlider(clientX);
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    handleMove(e.clientX);
+  const stopDragging = () => {
+    isDraggingRef.current = false;
+    rectRef.current = null;
   };
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   return (
     <div
       ref={containerRef}
-      className={`relative select-none overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-brand-950/40 cursor-ew-resize group ${className}`}
-      onMouseDown={(e) => {
-        setIsDragging(true);
-        handleMove(e.clientX);
+      className={`relative select-none overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 shadow-2xl shadow-brand-950/40 cursor-ew-resize group contain-paint ${className}`}
+      onMouseDown={(e) => startDragging(e.clientX)}
+      onMouseUp={stopDragging}
+      onMouseLeave={stopDragging}
+      onMouseMove={(e) => {
+        if (!isDraggingRef.current) return;
+        updateSlider(e.clientX);
       }}
-      onMouseUp={() => setIsDragging(false)}
-      onMouseLeave={() => setIsDragging(false)}
-      onMouseMove={handleMouseMove}
-      onTouchStart={(e) => {
-        setIsDragging(true);
-        handleMove(e.touches[0].clientX);
+      onTouchStart={(e) => startDragging(e.touches[0].clientX)}
+      onTouchEnd={stopDragging}
+      onTouchMove={(e) => {
+        if (!isDraggingRef.current) return;
+        updateSlider(e.touches[0].clientX);
       }}
-      onTouchEnd={() => setIsDragging(false)}
-      onTouchMove={handleTouchMove}
     >
       {/* Background (Enhanced / High-Res) */}
       <div className="relative w-full aspect-[4/3] md:aspect-[16/10] overflow-hidden">
@@ -64,43 +81,39 @@ export function ComparisonSlider({
         <img
           src={enhancedImage}
           alt="Enhanced HD Output"
-          className="w-full h-full object-cover pointer-events-none"
+          decoding="async"
+          className="w-full h-full object-cover pointer-events-none select-none"
         />
 
         {/* Enhanced Badge */}
-        <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/85 backdrop-blur-md border border-brand-500/30 text-brand-300 text-xs font-semibold shadow-lg">
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/85 backdrop-blur-md border border-brand-500/30 text-brand-300 text-xs font-semibold shadow-lg pointer-events-none">
           <Sparkles className="w-3.5 h-3.5 text-brand-400" />
           <span>{enhancedLabel}</span>
         </div>
       </div>
 
-      {/* Foreground Clipped (Original / Low-Res) */}
+      {/* Foreground Clipped (Original / Low-Res) - GPU Accelerated via clipPath */}
       <div
-        className="absolute inset-0 overflow-hidden"
-        style={{ width: `${sliderPosition}%` }}
+        className="absolute inset-0 overflow-hidden will-change-[clip-path]"
+        style={{ clipPath: `inset(0 ${100 - sliderPosition}% 0 0)` }}
       >
-        <div className="relative w-full h-full aspect-[4/3] md:aspect-[16/10]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={originalImage}
-            alt="Original Low-Res Input"
-            className="absolute top-0 left-0 w-full h-full object-cover filter blur-[1.5px] contrast-90 pointer-events-none"
-            style={{
-              width: containerRef.current ? `${containerRef.current.clientWidth}px` : '100%',
-              maxWidth: 'none',
-            }}
-          />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={originalImage}
+          alt="Original Low-Res Input"
+          decoding="async"
+          className="w-full h-full object-cover filter blur-[1.5px] contrast-90 pointer-events-none select-none transform-gpu"
+        />
 
-          {/* Original Badge */}
-          <div className="absolute top-4 left-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/85 backdrop-blur-md border border-zinc-700 text-zinc-300 text-xs font-medium shadow-lg">
-            <span>{originalLabel}</span>
-          </div>
+        {/* Original Badge */}
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/85 backdrop-blur-md border border-zinc-700 text-zinc-300 text-xs font-medium shadow-lg pointer-events-none">
+          <span>{originalLabel}</span>
         </div>
       </div>
 
       {/* Draggable Divider Line & Handle */}
       <div
-        className="absolute top-0 bottom-0 z-30 w-0.5 bg-gradient-to-b from-brand-400 via-accent-cyan to-brand-500 shadow-[0_0_12px_rgba(99,102,241,0.8)]"
+        className="absolute top-0 bottom-0 z-30 w-0.5 bg-gradient-to-b from-brand-400 via-accent-cyan to-brand-500 shadow-[0_0_12px_rgba(99,102,241,0.8)] pointer-events-none will-change-[left]"
         style={{ left: `${sliderPosition}%` }}
       >
         <div className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-10 h-10 rounded-full bg-zinc-900/95 border-2 border-brand-400 text-brand-300 shadow-xl shadow-brand-500/30 flex items-center justify-center transition-transform group-hover:scale-110 active:scale-95">
@@ -121,3 +134,4 @@ export function ComparisonSlider({
     </div>
   );
 }
+
