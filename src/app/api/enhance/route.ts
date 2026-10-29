@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Replicate from 'replicate';
+import sharp from 'sharp';
 import { auth } from '@clerk/nextjs/server';
 import { prisma } from '@/lib/prisma';
 
@@ -9,35 +10,54 @@ const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
 });
 
-// Helper: Convert uploaded File to a permanent Base64 Data URL (if reasonably sized)
-async function fileToDataUrl(file: File): Promise<string> {
-  // Cap raw DB inline storage at ~2.5MB to keep Neon queries and Vercel payloads fast
-  if (file.size > 2.5 * 1024 * 1024) {
+// Helper: Compress uploaded File to a lightweight WebP Base64 Data URL for permanent "Compare" slider
+async function fileToCompressedDataUrl(file: File): Promise<string> {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const inputBuffer = Buffer.from(arrayBuffer);
+
+    const compressedBuffer = await sharp(inputBuffer)
+      .rotate() // Preserve EXIF orientation
+      .resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer();
+
+    return `data:image/webp;base64,${compressedBuffer.toString('base64')}`;
+  } catch (err) {
+    console.warn('[Enhance API] Could not compress original upload:', err);
     return file.name || 'uploaded_file';
   }
-  const arrayBuffer = await file.arrayBuffer();
-  const base64 = Buffer.from(arrayBuffer).toString('base64');
-  const mimeType = file.type || 'image/jpeg';
-  return `data:${mimeType};base64,${base64}`;
 }
 
-// Helper: Fetch temporary Replicate URL and convert to permanent Base64 Data URL
+// Helper: Fetch 20MB+ Replicate PNG and compress to full-resolution 5K WebP (~800KB-1.5MB)
 async function persistReplicateUrl(tempUrl: string): Promise<string> {
   try {
     const res = await fetch(tempUrl);
     if (!res.ok) return tempUrl;
 
     const arrayBuffer = await res.arrayBuffer();
-    // If output exceeds ~3.5MB, keep URL to avoid Vercel's 4.5MB JSON response payload cap
-    if (arrayBuffer.byteLength > 3.5 * 1024 * 1024) {
+    const rawBuffer = Buffer.from(arrayBuffer);
+
+    // Keep full 4x pixel dimensions (e.g. 3372x5056), convert uncompressed PNG -> crisp WebP
+    let webpBuffer = await sharp(rawBuffer)
+      .webp({ quality: 88, effort: 4 })
+      .toBuffer();
+
+    // Secondary safety pass: if an ultra-dense 8K texture still exceeds 2.8MB, dial quality to 75
+    if (webpBuffer.byteLength > 2.8 * 1024 * 1024) {
+      webpBuffer = await sharp(rawBuffer)
+        .webp({ quality: 75, effort: 4 })
+        .toBuffer();
+    }
+
+    // Final Vercel 4.5MB JSON payload guardrail
+    if (webpBuffer.byteLength > 3.4 * 1024 * 1024) {
       return tempUrl;
     }
 
-    const contentType = res.headers.get('content-type') || 'image/png';
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-    return `data:${contentType};base64,${base64}`;
+    return `data:image/webp;base64,${webpBuffer.toString('base64')}`;
   } catch (err) {
-    console.warn('[Enhance API] Could not inline Replicate image, falling back to URL:', err);
+    console.warn('[Enhance API] Sharp compression failed, falling back to URL:', err);
     return tempUrl;
   }
 }
@@ -95,10 +115,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prepare permanent original URL for Before/After comparison in gallery
+    // Compress original upload into permanent WebP Data URL for the Before/After comparison slider
     let permanentOriginalUrl = 'uploaded_file';
     if (image instanceof File) {
-      permanentOriginalUrl = await fileToDataUrl(image);
+      permanentOriginalUrl = await fileToCompressedDataUrl(image);
     } else if (typeof image === 'string') {
       permanentOriginalUrl = image;
     }
@@ -135,7 +155,7 @@ export async function POST(req: NextRequest) {
       throw new Error('Replicate did not return an enhanced image URL');
     }
 
-    // Convert temporary Replicate link into a permanent Base64 Data URL
+    // Compress 20MB+ PNG into full-resolution WebP Base64 Data URL (~1MB)
     const permanentEnhancedUrl = await persistReplicateUrl(replicateUrl);
 
     // 3. Deduct 1 credit & save permanent image record in Neon DB
