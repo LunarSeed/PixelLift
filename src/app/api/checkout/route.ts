@@ -4,7 +4,6 @@ import { auth } from '@clerk/nextjs/server';
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Use Clerk's auth() to get the current userId. If unauthorized, return a 401.
     const { userId } = await auth();
 
     if (!userId) {
@@ -33,28 +32,24 @@ export async function POST(req: NextRequest) {
     });
 
     let priceId = process.env.STRIPE_PRICE_ID;
-    // Gracefully handle if product ID (prod_...) was provided instead of price ID (price_...)
     if (priceId.startsWith('prod_')) {
       const prices = await stripe.prices.list({ product: priceId, active: true, limit: 1 });
       if (prices.data.length > 0) {
         priceId = prices.data[0].id;
       }
     }
-// 2. Call stripe.checkout.sessions.create() with required routing URLs
- const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://pixel-lift-lake.vercel.app').replace(/\/$/, '');
 
- const session = await stripe.checkout.sessions.create({
-   mode: 'payment',
-   line_items: [
-     {
-       price: priceId,
-       quantity: 1,
-     },
-   ],
-   metadata: {
-     userId,
-     credits: '50',
-   metadata: {
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://pixel-lift-lake.vercel.app').replace(/\/$/, '');
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [
+        {
+          price: priceId,
+          quantity: 1,
+        },
+      ],
+      metadata: {
         userId,
         credits: '50',
       },
@@ -62,9 +57,7 @@ export async function POST(req: NextRequest) {
       success_url: `${appUrl}/dashboard?payment=success`,
       cancel_url: `${appUrl}/dashboard?payment=cancelled`,
     });
-   cancel_url: `${appUrl}/`,
- });
-// 3. Return JSON containing url
+
     return NextResponse.json({ url: session.url });
   } catch (error: any) {
     console.error('[Stripe Checkout Error]:', error);
@@ -74,4 +67,3 @@ export async function POST(req: NextRequest) {
     );
   }
 }
-
