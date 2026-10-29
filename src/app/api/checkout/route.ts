@@ -54,9 +54,14 @@ export async function POST(req: NextRequest) {
    metadata: {
      userId,
      credits: '50',
-   },
-   client_reference_id: userId,
-   success_url: `${appUrl}/dashboard`,
+   metadata: {
+        userId,
+        credits: '50',
+      },
+      client_reference_id: userId,
+      success_url: `${appUrl}/dashboard?payment=success`,
+      cancel_url: `${appUrl}/dashboard?payment=cancelled`,
+    });
    cancel_url: `${appUrl}/`,
  });
 // 3. Return JSON containing url
@@ -69,3 +74,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+

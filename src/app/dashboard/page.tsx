@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useUser } from '@clerk/nextjs';
 import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
 import { Dropzone } from '@/components/dashboard/Dropzone';
 import { ProcessingPreview } from '@/components/dashboard/ProcessingPreview';
@@ -12,10 +13,14 @@ import { useToast } from '@/components/ui/toast';
 import { ImageResult } from '@/types';
 import { Sparkles, Loader2 } from 'lucide-react';
 
-const DEMO_USER_ID = 'usr_demo_pixellift';
+const FALLBACK_GUEST_ID = 'usr_demo_pixellift';
 
 function DashboardContent() {
-  const [credits, setCredits] = useState<number>(5);
+  const { user, isLoaded } = useUser();
+  const activeUserId = user?.id || FALLBACK_GUEST_ID;
+  const activeUserEmail = user?.primaryEmailAddress?.emailAddress || '';
+
+  const [credits, setCredits] = useState<number>(0);
   const [images, setImages] = useState<ImageResult[]>([]);
   const [isTopUpOpen, setIsTopUpOpen] = useState(false);
 
@@ -29,13 +34,20 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
 
-  // Load user balance and recent image gallery
+  // Load signed-in user's balance and private image gallery
   const fetchUserData = useCallback(async () => {
+    if (!isLoaded) return;
+
     try {
-      const res = await fetch(`/api/user/credits?userId=${DEMO_USER_ID}`);
+      const params = new URLSearchParams({ userId: activeUserId });
+      if (activeUserEmail) {
+        params.set('email', activeUserEmail);
+      }
+
+      const res = await fetch(`/api/user/credits?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
-        setCredits(data.credits ?? 5);
+        setCredits(data.credits ?? 0);
         if (data.images) {
           setImages(data.images);
         }
@@ -43,7 +55,7 @@ function DashboardContent() {
     } catch (err) {
       console.error('Error fetching user data:', err);
     }
-  }, []);
+  }, [isLoaded, activeUserId, activeUserEmail]);
 
   useEffect(() => {
     fetchUserData();
@@ -51,14 +63,15 @@ function DashboardContent() {
 
   // Handle URL payment redirect callbacks
   useEffect(() => {
+    if (!isLoaded) return;
     const payment = searchParams.get('payment');
     if (payment === 'success') {
-      toast.success('Payment confirmed! +50 credits added to your account.');
+      toast.success('Payment confirmed! Credits added to your account.');
       fetchUserData();
     } else if (payment === 'cancelled') {
       toast.info('Checkout was cancelled. No charges were made.');
     }
-  }, [searchParams, toast, fetchUserData]);
+  }, [isLoaded, searchParams, toast, fetchUserData]);
 
   // Core enhance function: sends FormData with image file (or JSON for URL) to /api/enhance
   const enhanceImage = async (fileOrUrl: File | string) => {
@@ -80,7 +93,7 @@ function DashboardContent() {
       if (fileOrUrl instanceof File) {
         const formData = new FormData();
         formData.append('image', fileOrUrl);
-        formData.append('userId', DEMO_USER_ID);
+        formData.append('userId', activeUserId);
         formData.append('scale', '4');
 
         res = await fetch('/api/enhance', {
@@ -94,7 +107,7 @@ function DashboardContent() {
           body: JSON.stringify({
             image: fileOrUrl,
             imageUrl: fileOrUrl,
-            userId: DEMO_USER_ID,
+            userId: activeUserId,
             scale: 4,
           }),
         });
@@ -132,7 +145,6 @@ function DashboardContent() {
     }
   };
 
-  // Drag-and-drop file upload handler: triggers upload and enhance
   const handleFileSelect = async (file: File, base64: string) => {
     setSelectedFile(file);
     setOriginalImageUrl(base64);
@@ -160,6 +172,15 @@ function DashboardContent() {
     setEnhancedImageUrl(enh);
     window.scrollTo({ top: 150, behavior: 'smooth' });
   };
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-[#090a0f] flex flex-col items-center justify-center text-zinc-400">
+        <Loader2 className="w-8 h-8 animate-spin text-brand-400 mb-3" />
+        <p className="text-sm">Loading your account...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#090a0f] text-zinc-100 flex flex-col pb-20">
@@ -254,7 +275,7 @@ function DashboardContent() {
       <TopUpModal
         isOpen={isTopUpOpen}
         onClose={() => setIsTopUpOpen(false)}
-        userId={DEMO_USER_ID}
+        userId={activeUserId}
         onSuccess={fetchUserData}
       />
     </div>
