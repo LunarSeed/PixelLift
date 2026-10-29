@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import { ToastProvider } from '@/components/ui/toast';
 import { ClerkProvider } from '@clerk/nextjs';
+import { Analytics } from '@vercel/analytics/next';
 
 export const metadata: Metadata = {
   title: 'PixelLift - AI Image Super-Resolution & 4K Upscaler',
@@ -23,6 +24,7 @@ export default function RootLayout({
         <ClerkProvider>
           <ToastProvider>{children}</ToastProvider>
         </ClerkProvider>
+        <Analytics />
       </body>
     </html>
   );
