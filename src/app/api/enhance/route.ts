@@ -1,38 +1,62 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Replicate from 'replicate';
-import { PrismaClient } from '@prisma/client';
+import { auth } from '@clerk/nextjs/server';
+import { prisma } from '@/lib/prisma';
 
 export const maxDuration = 60;
-
-// Prisma client singleton for serverless Neon database connection
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
-const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
-  });
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
 
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN,
 });
 
-export async function POST(req: NextRequest | Request) {
+// Helper: Convert uploaded File to a permanent Base64 Data URL (if reasonably sized)
+async function fileToDataUrl(file: File): Promise<string> {
+  // Cap raw DB inline storage at ~2.5MB to keep Neon queries and Vercel payloads fast
+  if (file.size > 2.5 * 1024 * 1024) {
+    return file.name || 'uploaded_file';
+  }
+  const arrayBuffer = await file.arrayBuffer();
+  const base64 = Buffer.from(arrayBuffer).toString('base64');
+  const mimeType = file.type || 'image/jpeg';
+  return `data:${mimeType};base64,${base64}`;
+}
+
+// Helper: Fetch temporary Replicate URL and convert to permanent Base64 Data URL
+async function persistReplicateUrl(tempUrl: string): Promise<string> {
   try {
+    const res = await fetch(tempUrl);
+    if (!res.ok) return tempUrl;
+
+    const arrayBuffer = await res.arrayBuffer();
+    // If output exceeds ~3.5MB, keep URL to avoid Vercel's 4.5MB JSON response payload cap
+    if (arrayBuffer.byteLength > 3.5 * 1024 * 1024) {
+      return tempUrl;
+    }
+
+    const contentType = res.headers.get('content-type') || 'image/png';
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+    return `data:${contentType};base64,${base64}`;
+  } catch (err) {
+    console.warn('[Enhance API] Could not inline Replicate image, falling back to URL:', err);
+    return tempUrl;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const { userId: clerkUserId } = await auth();
     let image: File | string | null = null;
-    let userId = 'usr_demo_pixellift';
+    let userId = clerkUserId || 'usr_demo_pixellift';
     let scale = 4;
 
     const contentType = req.headers.get('content-type') || '';
 
-    // Process FormData request
     if (contentType.includes('application/json')) {
       const body = await req.json();
       image = body.image || body.imageUrl || null;
       userId = body.userId || userId;
       scale = Number(body.scale) || 4;
     } else {
-      // Extract the uploaded file from the image field of FormData
       const formData = await req.formData();
       const fileEntry = formData.get('image');
       if (fileEntry instanceof File || (typeof fileEntry === 'object' && fileEntry !== null)) {
@@ -51,7 +75,7 @@ export async function POST(req: NextRequest | Request) {
       );
     }
 
-    // 1. Query Neon database first: verify user has at least 1 credit
+    // 1. Verify user has at least 1 credit
     const user = await prisma.user.findFirst({
       where: {
         OR: [
@@ -67,41 +91,54 @@ export async function POST(req: NextRequest | Request) {
           error: 'Insufficient credits. You need at least 1 credit to upscale an image.',
           credits: user ? user.credits : 0,
         },
-        { status: 402 } // Payment Required
+        { status: 402 }
       );
     }
 
-    // 2. Call Replicate Real-ESRGAN model passing the File directly into input.image
+    // Prepare permanent original URL for Before/After comparison in gallery
+    let permanentOriginalUrl = 'uploaded_file';
+    if (image instanceof File) {
+      permanentOriginalUrl = await fileToDataUrl(image);
+    } else if (typeof image === 'string') {
+      permanentOriginalUrl = image;
+    }
+
+    // 2. Run Replicate Real-ESRGAN model
     const output = await replicate.run(
-      "nightmareai/real-esrgan:b0bb4c529bb749ac98145e70f42f88d36598e89310beeeba4ee00e14238d1b4d",
+      'nightmareai/real-esrgan:b0bb4c529bb749ac98145e70f42f88d36598e89310beeeba4ee00e14238d1b4d',
       {
         input: {
           image: image,
+          scale: scale,
         },
       }
     );
 
-    // Extract URL using output.url() from Replicate FileOutput
-    let enhancedUrl = '';
-    if (output && typeof (output as any).url === 'function') {
-      enhancedUrl = (output as any).url().href || (output as any).url().toString();
+    // Extract temporary Replicate delivery URL
+    let replicateUrl = '';
+    if (output && typeof (output as { url?: () => URL | string }).url === 'function') {
+      const u = (output as { url: () => URL | string }).url();
+      replicateUrl = typeof u === 'string' ? u : u.href || u.toString();
     } else if (typeof output === 'string') {
-      enhancedUrl = output;
+      replicateUrl = output;
     } else if (Array.isArray(output) && output.length > 0) {
       const item = output[0];
-      enhancedUrl =
+      replicateUrl =
         item && typeof item.url === 'function'
           ? item.url().href || item.url().toString()
           : String(item);
     } else {
-      enhancedUrl = String(output);
+      replicateUrl = String(output);
     }
 
-    if (!enhancedUrl) {
+    if (!replicateUrl) {
       throw new Error('Replicate did not return an enhanced image URL');
     }
 
-    // 3. Deduct 1 credit from user's database record via Prisma transaction before returning
+    // Convert temporary Replicate link into a permanent Base64 Data URL
+    const permanentEnhancedUrl = await persistReplicateUrl(replicateUrl);
+
+    // 3. Deduct 1 credit & save permanent image record in Neon DB
     const updatedUser = await prisma.$transaction(async (tx) => {
       const u = await tx.user.update({
         where: { id: user.id },
@@ -119,18 +156,11 @@ export async function POST(req: NextRequest | Request) {
         },
       });
 
-      const originalName =
-        image instanceof File
-          ? image.name
-          : typeof image === 'string' && image.length < 500
-          ? image
-          : 'uploaded_file';
-
       await tx.imageResult.create({
         data: {
           userId: user.id,
-          originalUrl: originalName,
-          enhancedUrl,
+          originalUrl: permanentOriginalUrl,
+          enhancedUrl: permanentEnhancedUrl,
           scaleFactor: scale,
         },
       });
@@ -140,9 +170,9 @@ export async function POST(req: NextRequest | Request) {
 
     return NextResponse.json({
       success: true,
-      enhancedUrl,
-      output: enhancedUrl,
-      url: enhancedUrl,
+      enhancedUrl: permanentEnhancedUrl,
+      output: permanentEnhancedUrl,
+      url: permanentEnhancedUrl,
       creditsRemaining: updatedUser.credits,
       credits: updatedUser.credits,
     });
